@@ -1,0 +1,12 @@
+[package]
+name = "open-search-providers"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+open-search-core.workspace = true
+
+[lints]
+workspace = true
