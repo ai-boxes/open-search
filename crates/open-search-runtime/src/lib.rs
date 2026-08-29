@@ -1,41 +1,25 @@
 use std::sync::Arc;
 
-use open_search_core::{
-    AnswerProvider, AnswerRequest, SearchError, SearchProvider, SearchRequest, SearchResponse,
-};
+use open_search_core::{SearchError, SearchProvider, SearchRequest, SearchResponse};
 
 #[derive(Clone)]
 pub struct SearchEngine {
-    search_provider: Arc<dyn SearchProvider>,
-    answer_provider: Arc<dyn AnswerProvider>,
+    provider: Arc<dyn SearchProvider>,
 }
 
 impl SearchEngine {
-    pub fn new(
-        search_provider: Arc<dyn SearchProvider>,
-        answer_provider: Arc<dyn AnswerProvider>,
-    ) -> Self {
-        Self {
-            search_provider,
-            answer_provider,
-        }
+    pub fn new(provider: Arc<dyn SearchProvider>) -> Self {
+        Self { provider }
     }
 
     pub async fn search(&self, request: SearchRequest) -> Result<SearchResponse, SearchError> {
         let request = request.validate()?;
-        let sources = self.search_provider.search(&request).await?;
-        let answer = self
-            .answer_provider
-            .answer(AnswerRequest {
-                query: request.query,
-                sources: sources.clone(),
-            })
-            .await?;
+        let capability = request.capability();
+        if !self.provider.supports(capability) {
+            return Err(SearchError::CapabilityUnavailable(capability));
+        }
 
-        Ok(SearchResponse {
-            answer: answer.text,
-            sources,
-        })
+        self.provider.search(request).await
     }
 }
 
@@ -45,8 +29,8 @@ mod tests {
 
     use async_trait::async_trait;
     use open_search_core::{
-        AnswerProvider, AnswerRequest, GeneratedAnswer, SearchError, SearchHit, SearchProvider,
-        SearchRequest, ValidatedSearchRequest,
+        SearchCapability, SearchError, SearchProvider, SearchRequest, SearchResponse,
+        ValidatedSearchRequest, WebSearchRequest, XSearchRequest,
     };
 
     use super::SearchEngine;
@@ -55,42 +39,81 @@ mod tests {
 
     #[async_trait]
     impl SearchProvider for FakeSearchProvider {
+        fn supports(&self, capability: SearchCapability) -> bool {
+            matches!(capability, SearchCapability::X | SearchCapability::Web)
+        }
+
         async fn search(
             &self,
-            request: &ValidatedSearchRequest,
-        ) -> Result<Vec<SearchHit>, SearchError> {
-            Ok(vec![SearchHit {
-                title: request.query.clone(),
-                url: "https://example.com/result".to_owned(),
-                snippet: "Evidence".to_owned(),
-                score: Some(1.0),
-            }])
+            request: ValidatedSearchRequest,
+        ) -> Result<SearchResponse, SearchError> {
+            let (kind, query) = match request {
+                ValidatedSearchRequest::X(request) => ("x", request.query),
+                ValidatedSearchRequest::Web(request) => ("web", request.query),
+            };
+            Ok(SearchResponse {
+                results: vec![serde_json::json!({"type": kind, "query": query})],
+            })
         }
     }
 
-    struct FakeAnswerProvider;
+    struct WebOnlySearchProvider;
 
     #[async_trait]
-    impl AnswerProvider for FakeAnswerProvider {
-        async fn answer(&self, request: AnswerRequest) -> Result<GeneratedAnswer, SearchError> {
-            Ok(GeneratedAnswer {
-                text: format!("{} source(s) for {}", request.sources.len(), request.query),
-            })
+    impl SearchProvider for WebOnlySearchProvider {
+        fn supports(&self, capability: SearchCapability) -> bool {
+            capability == SearchCapability::Web
+        }
+
+        async fn search(
+            &self,
+            _request: ValidatedSearchRequest,
+        ) -> Result<SearchResponse, SearchError> {
+            unreachable!("unsupported capability should not reach the provider")
         }
     }
 
     #[tokio::test]
-    async fn orchestrates_retrieval_before_answer_generation() {
-        let engine = SearchEngine::new(Arc::new(FakeSearchProvider), Arc::new(FakeAnswerProvider));
-        let response = engine
-            .search(SearchRequest {
-                query: "AI search".to_owned(),
-                max_results: Some(5),
-            })
-            .await
-            .expect("pipeline should succeed");
+    async fn executes_x_and_web_search_through_one_provider_contract() {
+        let engine = SearchEngine::new(Arc::new(FakeSearchProvider));
 
-        assert_eq!(response.answer, "1 source(s) for AI search");
-        assert_eq!(response.sources.len(), 1);
+        let x_response = engine
+            .search(SearchRequest::X(XSearchRequest {
+                query: "AI search".to_owned(),
+                from_date: None,
+                to_date: None,
+            }))
+            .await
+            .expect("X search should succeed");
+        let web_response = engine
+            .search(SearchRequest::Web(WebSearchRequest {
+                query: "AI search".to_owned(),
+                allowed_domains: Vec::new(),
+                excluded_domains: Vec::new(),
+            }))
+            .await
+            .expect("Web search should succeed");
+
+        assert_eq!(x_response.results[0]["type"], "x");
+        assert_eq!(x_response.results[0]["query"], "AI search");
+        assert_eq!(web_response.results[0]["type"], "web");
+    }
+
+    #[tokio::test]
+    async fn rejects_unsupported_capability_before_calling_provider() {
+        let engine = SearchEngine::new(Arc::new(WebOnlySearchProvider));
+        let error = engine
+            .search(SearchRequest::X(XSearchRequest {
+                query: "AI search".to_owned(),
+                from_date: None,
+                to_date: None,
+            }))
+            .await
+            .expect_err("unsupported search should fail");
+
+        assert_eq!(
+            error,
+            SearchError::CapabilityUnavailable(SearchCapability::X)
+        );
     }
 }

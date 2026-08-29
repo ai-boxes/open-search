@@ -13,14 +13,17 @@ axum.workspace = true
 open-search-core.workspace = true
 open-search-providers.workspace = true
 open-search-runtime.workspace = true
+rmcp.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
-serde_json.workspace = true
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
 tower.workspace = true
 
 [lints]
