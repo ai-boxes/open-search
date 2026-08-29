@@ -1,32 +1,25 @@
 use async_trait::async_trait;
 use open_search_core::{
-    AnswerProvider, AnswerRequest, GeneratedAnswer, SearchError, SearchHit, SearchProvider,
-    ValidatedSearchRequest,
+    SearchCapability, SearchError, SearchProvider, SearchResponse, ValidatedSearchRequest,
 };
+
+pub mod grok;
 
 #[derive(Debug, Default)]
 pub struct UnconfiguredSearchProvider;
 
 #[async_trait]
 impl SearchProvider for UnconfiguredSearchProvider {
+    fn supports(&self, capability: SearchCapability) -> bool {
+        matches!(capability, SearchCapability::X | SearchCapability::Web)
+    }
+
     async fn search(
         &self,
-        _request: &ValidatedSearchRequest,
-    ) -> Result<Vec<SearchHit>, SearchError> {
-        Err(SearchError::SearchProviderUnavailable(
+        _request: ValidatedSearchRequest,
+    ) -> Result<SearchResponse, SearchError> {
+        Err(SearchError::ProviderUnavailable(
             "no search provider has been configured".to_owned(),
-        ))
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct UnconfiguredAnswerProvider;
-
-#[async_trait]
-impl AnswerProvider for UnconfiguredAnswerProvider {
-    async fn answer(&self, _request: AnswerRequest) -> Result<GeneratedAnswer, SearchError> {
-        Err(SearchError::AnswerProviderUnavailable(
-            "no answer provider has been configured".to_owned(),
         ))
     }
 }
